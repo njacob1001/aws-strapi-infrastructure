@@ -50,13 +50,20 @@ resource "aws_subnet" "public_c" {
   tags                    = { Name = "subnet-public-c" }
 }
 
-# Subred privada (para la base de datos)
-resource "aws_subnet" "private" {
+resource "aws_subnet" "private_a" {
   vpc_id                  = aws_vpc.main.id
-  cidr_block              = "10.0.4.0/24"
+  cidr_block              = "10.0.6.0/24"
   availability_zone       = "us-east-1a"
   map_public_ip_on_launch = false
-  tags                    = { Name = "subnet-private" }
+  tags                    = { Name = "subnet-private-a" }
+}
+
+resource "aws_subnet" "private_b" {
+  vpc_id                  = aws_vpc.main.id
+  cidr_block              = "10.0.7.0/24"
+  availability_zone       = "us-east-1b"
+  map_public_ip_on_launch = false
+  tags                    = { Name = "subnet-private-b" }
 }
 
 #
@@ -285,7 +292,8 @@ resource "aws_launch_template" "lt_ec2" {
     security_groups             = [aws_security_group.sg_ec2.id]
   }
 
-  user_data = <<-EOF
+  # Aquí envolvemos el heredoc con base64encode()
+  user_data = base64encode(<<-EOF
     #!/bin/bash
     set -e
 
@@ -304,13 +312,12 @@ resource "aws_launch_template" "lt_ec2" {
     export DATABASE_HOST="${aws_db_instance.postgres.address}"
     export DATABASE_PORT="5432"
     export DATABASE_NAME="mydatabase"
-    export DATABASE_USERNAME="admin"
+    export DATABASE_USERNAME="dbadmin"
     export DATABASE_PASSWORD="TuPasswordSegura123!"
     export DATABASE_CLIENT="postgres"
     export AWS_REGION="us-east-1"
     export AWS_S3_BUCKET="${aws_s3_bucket.bucket_app.bucket}"
 
-    # Cuando EC2 ejecute esto, $${DATABASE_HOST} se traducirá a $${DATABASE_HOST} en tiempo de shell
     npx create-strapi-app@latest . \
       --no-run \
       --quickstart=false \
@@ -330,6 +337,7 @@ resource "aws_launch_template" "lt_ec2" {
 
     pm2 startup systemd -u ec2-user --hp /home/ec2-user
   EOF
+  )
 
   tag_specifications {
     resource_type = "instance"
@@ -377,8 +385,12 @@ resource "aws_autoscaling_group" "asg_ec2" {
 
 # Grupo de subredes para RDS (solo incluye la subred privada)
 resource "aws_db_subnet_group" "rds_subnet_group" {
-  name       = "rds-subnet-group"
-  subnet_ids = [aws_subnet.private.id]
+  name = "rds-subnet-group"
+  subnet_ids = [
+    aws_subnet.private_a.id,
+    aws_subnet.private_b.id
+    # …o agrega aws_subnet.private_c.id si creas otra
+  ]
   tags = {
     Name = "rds-subnet-group"
   }
@@ -388,12 +400,12 @@ resource "aws_db_subnet_group" "rds_subnet_group" {
 resource "aws_db_instance" "postgres" {
   identifier             = "postgres-db"
   engine                 = "postgres"
-  engine_version         = "13.7"
+  engine_version         = "13.16"
   instance_class         = "db.t3.micro"
   allocated_storage      = 20
   storage_type           = "gp2"
   db_name                = "mydatabase"
-  username               = "admin"
+  username               = "dbadmin"
   password               = "TuPasswordSegura123!" # <-- Cámbiala antes de aplicar
   parameter_group_name   = "default.postgres13"
   db_subnet_group_name   = aws_db_subnet_group.rds_subnet_group.name
@@ -421,12 +433,6 @@ resource "aws_s3_bucket" "bucket_app" {
     Environment = "dev"
   }
 }
-
-resource "aws_s3_bucket_acl" "bucket_app_acl" {
-  bucket = aws_s3_bucket.bucket_app.id
-  acl    = "private"
-}
-
 #
 # 8) Outputs útiles (opcional)
 #
