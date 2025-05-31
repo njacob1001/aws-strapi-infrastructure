@@ -1,4 +1,3 @@
-
 # main.tf
 
 terraform {
@@ -32,7 +31,7 @@ resource "aws_subnet" "public_a" {
   cidr_block              = "10.0.1.0/24"
   availability_zone       = "us-east-1a"
   map_public_ip_on_launch = true
-  tags = { Name = "subnet-public-a" }
+  tags                    = { Name = "subnet-public-a" }
 }
 
 resource "aws_subnet" "public_b" {
@@ -40,7 +39,7 @@ resource "aws_subnet" "public_b" {
   cidr_block              = "10.0.2.0/24"
   availability_zone       = "us-east-1b"
   map_public_ip_on_launch = true
-  tags = { Name = "subnet-public-b" }
+  tags                    = { Name = "subnet-public-b" }
 }
 
 resource "aws_subnet" "public_c" {
@@ -48,7 +47,7 @@ resource "aws_subnet" "public_c" {
   cidr_block              = "10.0.3.0/24"
   availability_zone       = "us-east-1c"
   map_public_ip_on_launch = true
-  tags = { Name = "subnet-public-c" }
+  tags                    = { Name = "subnet-public-c" }
 }
 
 # Subred privada (para la base de datos)
@@ -57,7 +56,7 @@ resource "aws_subnet" "private" {
   cidr_block              = "10.0.4.0/24"
   availability_zone       = "us-east-1a"
   map_public_ip_on_launch = false
-  tags = { Name = "subnet-private" }
+  tags                    = { Name = "subnet-private" }
 }
 
 #
@@ -65,7 +64,7 @@ resource "aws_subnet" "private" {
 #
 resource "aws_internet_gateway" "igw" {
   vpc_id = aws_vpc.main.id
-  tags = { Name = "igw-main" }
+  tags   = { Name = "igw-main" }
 }
 
 # Route table para las subredes públicas
@@ -103,7 +102,7 @@ resource "aws_route_table_association" "c_association" {
 
 # 3.1) SG del Application Load Balancer (permitir HTTP desde internet)
 resource "aws_security_group" "sg_alb" {
-  name        = "sg-alb"
+  name        = "alb-sg"
   description = "Allow HTTP from 0.0.0.0/0"
   vpc_id      = aws_vpc.main.id
 
@@ -125,12 +124,12 @@ resource "aws_security_group" "sg_alb" {
     cidr_blocks = ["0.0.0.0/0"]
   }
 
-  tags = { Name = "sg-alb" }
+  tags = { Name = "sg_alb" }
 }
 
 # 3.2) SG para los EC2 en el Auto Scaling Group (acepta tráfico del ALB en el puerto 80)
 resource "aws_security_group" "sg_ec2" {
-  name        = "sg-ec2"
+  name        = "ec2-sg"
   description = "Allow HTTP desde el ALB"
   vpc_id      = aws_vpc.main.id
 
@@ -155,7 +154,7 @@ resource "aws_security_group" "sg_ec2" {
 
 # 3.3) SG para la base de datos PostgreSQL (acepta sólo desde los EC2)
 resource "aws_security_group" "sg_rds" {
-  name        = "sg-rds"
+  name        = "rds-sg"
   description = "Allow PostgreSQL desde instancias EC2"
   vpc_id      = aws_vpc.main.id
 
@@ -186,7 +185,7 @@ resource "aws_lb" "app_lb" {
   internal           = false
   load_balancer_type = "application"
   security_groups    = [aws_security_group.sg_alb.id]
-  subnets            = [
+  subnets = [
     aws_subnet.public_a.id,
     aws_subnet.public_b.id,
     aws_subnet.public_c.id
@@ -197,7 +196,7 @@ resource "aws_lb" "app_lb" {
 # Target Group para EC2 (HTTP:80)
 resource "aws_lb_target_group" "tg_ec2" {
   name        = "tg-ec2"
-  port        = 80
+  port        = 1337
   protocol    = "HTTP"
   vpc_id      = aws_vpc.main.id
   target_type = "instance"
@@ -232,10 +231,54 @@ resource "aws_lb_listener" "http" {
 #
 
 # 5.1) Launch Template para las instancias EC2
+resource "aws_iam_role" "ec2_strapi_role" {
+  name = "ec2-strapi-role"
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Action = "sts:AssumeRole"
+      Effect = "Allow"
+      Principal = {
+        Service = "ec2.amazonaws.com"
+      }
+    }]
+  })
+}
+
+resource "aws_iam_role_policy" "ec2_strapi_s3_policy" {
+  name = "ec2-strapi-s3-policy"
+  role = aws_iam_role.ec2_strapi_role.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Action = [
+        "s3:PutObject",
+        "s3:GetObject",
+        "s3:DeleteObject",
+        "s3:ListBucket"
+      ]
+      Resource = [
+        aws_s3_bucket.bucket_app.arn,
+        "${aws_s3_bucket.bucket_app.arn}/*"
+      ]
+    }]
+  })
+}
+
+resource "aws_iam_instance_profile" "ec2_strapi_profile" {
+  name = "ec2-strapi-profile"
+  role = aws_iam_role.ec2_strapi_role.name
+}
+
 resource "aws_launch_template" "lt_ec2" {
   name_prefix   = "lt-ec2-"
   image_id      = "ami-0c02fb55956c7d316" # <-- Cambia al AMI que necesites
   instance_type = "t3.micro"
+
+  iam_instance_profile {
+    name = aws_iam_instance_profile.ec2_strapi_profile.name
+  }
 
   network_interfaces {
     associate_public_ip_address = true
@@ -243,14 +286,50 @@ resource "aws_launch_template" "lt_ec2" {
   }
 
   user_data = <<-EOF
-              #!/bin/bash
-              # Ejemplo de User Data: instalar nginx y servir página de prueba
-              apt-get update -y
-              apt-get install -y nginx
-              systemctl enable nginx
-              systemctl start nginx
-              echo "<h1>¡Hola desde EC2!</h1>" > /var/www/html/index.html
-              EOF
+    #!/bin/bash
+    set -e
+
+    apt-get update -y
+    apt-get install -y curl git build-essential
+
+    curl -fsSL https://deb.nodesource.com/setup_16.x | bash -
+    apt-get install -y nodejs
+
+    npm install -g pm2
+
+    mkdir -p /srv/strapi
+    cd /srv/strapi
+
+    # Exportamos variables con los valores reales de Terraform
+    export DATABASE_HOST="${aws_db_instance.postgres.address}"
+    export DATABASE_PORT="5432"
+    export DATABASE_NAME="mydatabase"
+    export DATABASE_USERNAME="admin"
+    export DATABASE_PASSWORD="TuPasswordSegura123!"
+    export DATABASE_CLIENT="postgres"
+    export AWS_REGION="us-east-1"
+    export AWS_S3_BUCKET="${aws_s3_bucket.bucket_app.bucket}"
+
+    # Cuando EC2 ejecute esto, $${DATABASE_HOST} se traducirá a $${DATABASE_HOST} en tiempo de shell
+    npx create-strapi-app@latest . \
+      --no-run \
+      --quickstart=false \
+      --dbclient postgres \
+      --dbhost "$${DATABASE_HOST}" \
+      --dbport "$${DATABASE_PORT}" \
+      --dbname "$${DATABASE_NAME}" \
+      --dbusername "$${DATABASE_USERNAME}" \
+      --dbpassword "$${DATABASE_PASSWORD}" \
+      --dbssl false
+
+    npm install --production
+    npm run build
+
+    pm2 start npm --name strapi -- start
+    pm2 save
+
+    pm2 startup systemd -u ec2-user --hp /home/ec2-user
+  EOF
 
   tag_specifications {
     resource_type = "instance"
@@ -262,11 +341,11 @@ resource "aws_launch_template" "lt_ec2" {
 
 # 5.2) Auto Scaling Group
 resource "aws_autoscaling_group" "asg_ec2" {
-  name                      = "asg-ec2"
-  max_size                  = 3
-  min_size                  = 2
-  desired_capacity          = 2
-  vpc_zone_identifier       = [
+  name             = "asg-ec2"
+  max_size         = 3
+  min_size         = 2
+  desired_capacity = 2
+  vpc_zone_identifier = [
     aws_subnet.public_a.id,
     aws_subnet.public_b.id,
     aws_subnet.public_c.id,
@@ -281,13 +360,12 @@ resource "aws_autoscaling_group" "asg_ec2" {
   health_check_type         = "ELB"
   health_check_grace_period = 60
 
-  tags = [
-    {
-      key                 = "Name"
-      value               = "ec2-asg-instance"
-      propagate_at_launch = true
-    }
-  ]
+  tag {
+    key                 = "Name"
+    value               = "ec2-asg-instance"
+    propagate_at_launch = true
+  }
+
 
   # Evitar destruir inmediatamente si falla salud; dejar que ASG reemplace
   force_delete = false
@@ -308,21 +386,21 @@ resource "aws_db_subnet_group" "rds_subnet_group" {
 
 # Instancia RDS PostgreSQL
 resource "aws_db_instance" "postgres" {
-  identifier              = "postgres-db"
-  engine                  = "postgres"
-  engine_version          = "13.7"
-  instance_class          = "db.t3.micro"
-  allocated_storage       = 20
-  storage_type            = "gp2"
-  name                    = "mydatabase"
-  username                = "admin"
-  password                = "TuPasswordSegura123!"  # <-- Cámbiala antes de aplicar
-  parameter_group_name    = "default.postgres13"
-  db_subnet_group_name    = aws_db_subnet_group.rds_subnet_group.name
-  vpc_security_group_ids  = [aws_security_group.sg_rds.id]
-  skip_final_snapshot     = true
-  publicly_accessible     = false
-  multi_az                = false
+  identifier             = "postgres-db"
+  engine                 = "postgres"
+  engine_version         = "13.7"
+  instance_class         = "db.t3.micro"
+  allocated_storage      = 20
+  storage_type           = "gp2"
+  db_name                = "mydatabase"
+  username               = "admin"
+  password               = "TuPasswordSegura123!" # <-- Cámbiala antes de aplicar
+  parameter_group_name   = "default.postgres13"
+  db_subnet_group_name   = aws_db_subnet_group.rds_subnet_group.name
+  vpc_security_group_ids = [aws_security_group.sg_rds.id]
+  skip_final_snapshot    = true
+  publicly_accessible    = false
+  multi_az               = false
 
   # Optimiza tiempos de backup si quisieras
   backup_retention_period = 7
@@ -337,13 +415,16 @@ resource "aws_db_instance" "postgres" {
 # 7) Bucket de S3
 #
 resource "aws_s3_bucket" "bucket_app" {
-  bucket = "mi-bucket-ejemplo-terraform-2025" # <-- Cámbialo a algo único globalmente
-  acl    = "private"
-
+  bucket = "uao-maestria-ai-2025-curso-aws" # <-- Cámbialo a algo único globalmente
   tags = {
     Name        = "bucket-app"
     Environment = "dev"
   }
+}
+
+resource "aws_s3_bucket_acl" "bucket_app_acl" {
+  bucket = aws_s3_bucket.bucket_app.id
+  acl    = "private"
 }
 
 #
@@ -356,7 +437,7 @@ output "vpc_id" {
 
 output "subnet_public_ids" {
   description = "IDs de subredes públicas"
-  value       = [
+  value = [
     aws_subnet.public_a.id,
     aws_subnet.public_b.id,
     aws_subnet.public_c.id,
