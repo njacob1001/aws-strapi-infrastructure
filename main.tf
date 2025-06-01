@@ -19,6 +19,7 @@ provider "aws" {
 #
 resource "aws_vpc" "main" {
   cidr_block           = "10.0.0.0/16"
+  enable_dns_support   = true
   enable_dns_hostnames = true
   tags = {
     Name = "vpc-main"
@@ -121,6 +122,14 @@ resource "aws_security_group" "sg_alb" {
     cidr_blocks = ["0.0.0.0/0"]
   }
 
+  ingress {
+    description = "HTTPS desde internet"
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
   # (Si necesitas HTTPS, agregar puerto 443 aquí)
 
   egress {
@@ -140,12 +149,22 @@ resource "aws_security_group" "sg_ec2" {
   description = "Allow HTTP desde el ALB"
   vpc_id      = aws_vpc.main.id
 
+
+  # En lugar de from_port = 80, debe ser 1337:
   ingress {
-    description     = "HTTP desde ALB"
-    from_port       = 80
-    to_port         = 80
-    protocol        = "tcp"
-    security_groups = [aws_security_group.sg_alb.id]
+    description = "HTTP Strapi directo desde Internet"
+    from_port   = 1337
+    to_port     = 1337
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  ingress {
+    description = "SSH desde Internet (solo para pruebas)"
+    from_port   = 22
+    to_port     = 22
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
   }
 
   egress {
@@ -209,7 +228,7 @@ resource "aws_lb_target_group" "tg_ec2" {
   target_type = "instance"
 
   health_check {
-    path                = "/"
+    path                = "/admin/auth/login"
     protocol            = "HTTP"
     matcher             = "200"
     interval            = 30
@@ -280,8 +299,9 @@ resource "aws_iam_instance_profile" "ec2_strapi_profile" {
 
 resource "aws_launch_template" "lt_ec2" {
   name_prefix   = "lt-ec2-"
-  image_id      = "ami-0c02fb55956c7d316" # <-- Cambia al AMI que necesites
+  image_id      = "ami-0da48b394c1af1d41" # custom AMI with strapi builded
   instance_type = "t3.micro"
+  key_name      = "debugger"
 
   iam_instance_profile {
     name = aws_iam_instance_profile.ec2_strapi_profile.name
@@ -294,49 +314,26 @@ resource "aws_launch_template" "lt_ec2" {
 
   # Aquí envolvemos el heredoc con base64encode()
   user_data = base64encode(<<-EOF
-    #!/bin/bash
-    set -e
+ #!/bin/bash
+  set -euxo pipefail
 
-    apt-get update -y
-    apt-get install -y curl git build-essential
+  # Redirigir logs de user_data
+  exec > >(tee /var/log/user_data_debug.log | logger -t user-data -s 2>/dev/console) 2>&1
 
-    curl -fsSL https://deb.nodesource.com/setup_16.x | bash -
-    apt-get install -y nodejs
+  echo "📁 Entrando a /home/ec2-user/my-app como ec2-user..."
+  runuser -l ec2-user -c "cd /home/ec2-user/my-app"
 
-    npm install -g pm2
+  echo "🔁 Iniciando Strapi con PM2 (modo producción, como ec2-user)..."
+  # Poner la ruta completa a ecosystem.config.js si no estás en ese pwd
+  runuser -l ec2-user -c "export NODE_ENV=production && export DBADDR=${aws_db_instance.postgres.address} && pm2 start /home/ec2-user/my-app/ecosystem.config.js --env production"
 
-    mkdir -p /srv/strapi
-    cd /srv/strapi
+  echo "💾 Guardando proceso PM2 y configurando startup para ec2-user..."
+  runuser -l ec2-user -c "pm2 save"
+  runuser -l ec2-user -c "pm2 startup systemd -u ec2-user --hp /home/ec2-user"
 
-    # Exportamos variables con los valores reales de Terraform
-    export DATABASE_HOST="${aws_db_instance.postgres.address}"
-    export DATABASE_PORT="5432"
-    export DATABASE_NAME="mydatabase"
-    export DATABASE_USERNAME="dbadmin"
-    export DATABASE_PASSWORD="TuPasswordSegura123!"
-    export DATABASE_CLIENT="postgres"
-    export AWS_REGION="us-east-1"
-    export AWS_S3_BUCKET="${aws_s3_bucket.bucket_app.bucket}"
-
-    npx create-strapi-app@latest . \
-      --no-run \
-      --quickstart=false \
-      --dbclient postgres \
-      --dbhost "$${DATABASE_HOST}" \
-      --dbport "$${DATABASE_PORT}" \
-      --dbname "$${DATABASE_NAME}" \
-      --dbusername "$${DATABASE_USERNAME}" \
-      --dbpassword "$${DATABASE_PASSWORD}" \
-      --dbssl false
-
-    npm install --production
-    npm run build
-
-    pm2 start npm --name strapi -- start
-    pm2 save
-
-    pm2 startup systemd -u ec2-user --hp /home/ec2-user
-  EOF
+  echo "✅ Setup finalizado correctamente"
+  touch /var/log/user_data_done.log
+EOF
   )
 
   tag_specifications {
@@ -366,7 +363,7 @@ resource "aws_autoscaling_group" "asg_ec2" {
   target_group_arns = [aws_lb_target_group.tg_ec2.arn]
 
   health_check_type         = "ELB"
-  health_check_grace_period = 60
+  health_check_grace_period = 180
 
   tag {
     key                 = "Name"
