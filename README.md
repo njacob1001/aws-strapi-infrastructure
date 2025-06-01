@@ -52,5 +52,4 @@ A continuación se presenta el diagrama arquitectónico de la solución desplega
 
 Para estimar el costo de operación durante 12 meses en la región **us-east-1**, se utilizó la **Calculadora de Precios de AWS**, los detalles de los precios se pueden encontrar en el siguiente enlace: https://calculator.aws/#/estimate?id=3e8c715d6ac4cbedd2e3769f37408105fc69a3e0.
 
-![precios aws](./pricing.png)
-
+![detalles precios aws](./pricing_details.png)
