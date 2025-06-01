@@ -424,7 +424,8 @@ resource "aws_db_instance" "postgres" {
 # 7) Bucket de S3
 #
 resource "aws_s3_bucket" "bucket_app" {
-  bucket = "uao-maestria-ai-2025-curso-aws" # <-- Cámbialo a algo único globalmente
+  bucket = "uao-maestria-ai-2025-curso-aws"
+  force_destroy = true
   tags = {
     Name        = "bucket-app"
     Environment = "dev"
