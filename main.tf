@@ -299,7 +299,7 @@ resource "aws_iam_instance_profile" "ec2_strapi_profile" {
 
 resource "aws_launch_template" "lt_ec2" {
   name_prefix   = "lt-ec2-"
-  image_id      = "ami-0da48b394c1af1d41" # custom AMI with strapi builded
+  image_id      = "ami-008a6fa26109d18fc" # custom AMI with strapi builded
   instance_type = "t3.micro"
   key_name      = "debugger"
 
@@ -430,6 +430,65 @@ resource "aws_s3_bucket" "bucket_app" {
     Environment = "dev"
   }
 }
+
+# 7.0) Desbloquear a nivel de CUENTA las políticas públicas
+#
+#     Sin esto, AWS rechazará cualquier intento de aplicar bucket policies
+#     que permitan acceso público. Necesitas tener permisos para cambiarlo.
+#
+resource "aws_s3_account_public_access_block" "account_block" {
+  # IMPORTANTE: todos estos en false para permitir que tu bucket policy funcione
+  block_public_acls       = false
+  block_public_policy     = false
+  ignore_public_acls      = false
+  restrict_public_buckets = false
+}
+
+#
+# 7.1) Configuración de bloqueo de acceso público para ESTE BUCKET
+#
+#     Aquí desactivamos el “Block Public Policy” a nivel de bucket, de modo
+#     que la policy (más abajo) pueda aplicarse. Sin esto, AWS bloquea la policy.
+#
+resource "aws_s3_bucket_public_access_block" "bucket_app_block" {
+  bucket = aws_s3_bucket.bucket_app.id
+
+  # Para que la bucket policy tenga efecto:
+  block_public_acls       = false
+  block_public_policy     = false
+  ignore_public_acls      = false
+  restrict_public_buckets = false
+}
+
+#
+# 7.2) BUCKET POLICY para exponer objetos públicamente
+#
+#     Al depender explícitamente de "bucket_app_block" y de "account_block",
+#     Terraform se asegurará de crear primero los bloques, y luego aplicará la
+#     policy que permite GET a cualquiera (*). Así obtienes URLs públicas.
+#
+resource "aws_s3_bucket_policy" "bucket_app_policy" {
+  bucket = aws_s3_bucket.bucket_app.id
+
+  # Forzamos la dependencia para que Terraform no intente crear la policy
+  # antes de desactivar los bloques de acceso público.
+  depends_on = [
+    aws_s3_bucket_public_access_block.bucket_app_block,
+    aws_s3_account_public_access_block.account_block,
+  ]
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid       = "AllowPublicGetObject"
+      Effect    = "Allow"
+      Principal = "*"
+      Action    = "s3:GetObject"
+      Resource  = "${aws_s3_bucket.bucket_app.arn}/*"
+    }]
+  })
+}
+
 #
 # 8) Outputs útiles (opcional)
 #
