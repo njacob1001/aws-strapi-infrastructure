@@ -40,9 +40,9 @@ A continuación se presenta el diagrama arquitectónico de la solución desplega
    - Un **Auto Scaling Group** (ASG) gestiona dinámicamente el número de instancias EC2, garantizando escalabilidad horizontal.
    - Los **Grupos de Seguridad** (Security Groups) asociadas a las EC2 permiten únicamente tráfico entrante desde el ALB (puerto 80/443) y tráfico saliente hacia la base de datos.
 
-3. **Subred Privada**
+3. **Subredes Privadas**
 
-   - Aloja una base de datos **Amazon RDS for PostgreSQL** en una sola AZ.
+   - Alojan una base de datos **Amazon RDS for PostgreSQL** en cada AZ.
    - Un **Grupo de Seguridad** específico para RDS restringe acceso únicamente a las instancias EC2 de la capa de aplicación por security group id.
 
 4. **S3 Bucket**
