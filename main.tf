@@ -393,6 +393,17 @@ resource "aws_db_subnet_group" "rds_subnet_group" {
   }
 }
 
+resource "aws_db_parameter_group" "pg_logs" {
+  name        = "pg-logs"
+  family      = "postgres13"
+  description = "Parameter group para logging de modificaciones"
+
+  parameter {
+    name  = "log_statement"
+    value = "mod"        # loguea todo lo que modifica datos
+  }
+}
+
 # Instancia RDS PostgreSQL
 resource "aws_db_instance" "postgres" {
   identifier             = "postgres-db"
@@ -403,8 +414,8 @@ resource "aws_db_instance" "postgres" {
   storage_type           = "gp2"
   db_name                = "mydatabase"
   username               = "dbadmin"
-  password               = "TuPasswordSegura123!" # <-- Cámbiala antes de aplicar
-  parameter_group_name   = "default.postgres13"
+  password               = "TuPasswordSegura123!"
+  parameter_group_name   = aws_db_parameter_group.pg_logs.name
   db_subnet_group_name   = aws_db_subnet_group.rds_subnet_group.name
   vpc_security_group_ids = [aws_security_group.sg_rds.id]
   skip_final_snapshot    = true
@@ -414,6 +425,8 @@ resource "aws_db_instance" "postgres" {
   # Optimiza tiempos de backup si quisieras
   backup_retention_period = 7
   deletion_protection     = false
+  enabled_cloudwatch_logs_exports  = ["postgresql"]
+  apply_immediately                 = true
 
   tags = {
     Name = "postgres-db"
@@ -438,7 +451,7 @@ resource "aws_s3_bucket" "bucket_app" {
 #     que permitan acceso público. Necesitas tener permisos para cambiarlo.
 #
 resource "aws_s3_account_public_access_block" "account_block" {
-  # IMPORTANTE: todos estos en false para permitir que tu bucket policy funcione
+  # todos estos en false para permitir que tu bucket policy funcione
   block_public_acls       = false
   block_public_policy     = false
   ignore_public_acls      = false
